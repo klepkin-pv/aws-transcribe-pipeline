@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: python -m pip install "pytest>=8.0" "ruff>=0.6"
+
+      - name: Lint
+        run: ruff check src tests
+
+      - name: Tests
+        run: pytest
+
+  terraform:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.9.8"
+
+      - name: Format check
+        run: terraform -chdir=infra fmt -check -recursive
+
+      - name: Init
+        run: terraform -chdir=infra init -backend=false
+
+      - name: Validate
+        run: terraform -chdir=infra validate
