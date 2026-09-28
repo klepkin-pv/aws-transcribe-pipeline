@@ -45,6 +45,16 @@ S3 uploads/ ──ObjectCreated──▶ Lambda: dispatcher ──▶ SQS jobs (
 External providers (AWS Transcribe, the LLM behind the scoring step) sit behind interfaces with
 fakes in tests, so the whole pipeline is testable locally with `moto` and without paid API calls.
 
+## Data model
+
+Single DynamoDB table (`PAY_PER_REQUEST`, PITR enabled, TTL on `expires_at`):
+
+- base item: `pk = USER#<sub>`, `sk = JOB#<created_at>#<job_id>` — per-user listing, newest first
+- alternate lookup: GSI `gsi1pk = JOB#<job_id>` — pipeline workers reach a job by id alone
+- job status follows a small state machine (`created → … → done / failed`); transitions are
+  guarded by conditional writes, so a stale worker replay loses the race instead of corrupting
+  the state
+
 ## Stack
 
 - Python 3.12, FastAPI, boto3
