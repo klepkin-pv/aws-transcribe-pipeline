@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+dist/
+build/
+
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+crash.log
+override.tf
+override.tf.json
+*.tfvars
+!*.tfvars.example
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
