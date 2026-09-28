@@ -1,0 +1,74 @@
+# aws-transcribe-pipeline
+
+[![CI](https://github.com/klepkin-pv/aws-transcribe-pipeline/actions/workflows/ci.yml/badge.svg)](https://github.com/klepkin-pv/aws-transcribe-pipeline/actions/workflows/ci.yml)
+
+Serverless async processing pipeline on AWS: upload a file, get an automatic transcription and an
+AI-generated summary and score back.
+
+The domain is intentionally thin — the point of the project is the AWS side: managed services,
+event-driven processing, scaling, fault tolerance and day-2 operations, all defined as code.
+
+## Status
+
+Work in progress. The pipeline is being built incrementally; every commit keeps CI green.
+
+## Architecture (draft)
+
+```
+client
+  │
+  ▼
+API Gateway (HTTP API) ──── JWT authorizer (Cognito)
+  │
+  ▼
+Lambda: api (FastAPI) ── POST /jobs returns a presigned PUT URL for S3
+  │                       GET /jobs/{id} returns status and results
+  ▼
+DynamoDB single-table (job state)
+  ▲
+  │
+S3 uploads/ ──ObjectCreated──▶ Lambda: dispatcher ──▶ SQS jobs (with DLQ)
+                                                        │
+                                                        ▼
+                                                 Lambda: worker
+                                                  │ starts an AWS Transcribe job
+                                                  ▼
+                                       EventBridge (Transcribe job completed)
+                                                        │
+                                                        ▼
+                                                 Lambda: finalizer
+                                                  │ transcript → scoring provider
+                                                  ▼
+                                       DynamoDB (status=done, score, summary)
+```
+
+External providers (AWS Transcribe, the LLM behind the scoring step) sit behind interfaces with
+fakes in tests, so the whole pipeline is testable locally with `moto` and without paid API calls.
+
+## Stack
+
+- Python 3.12, FastAPI, boto3
+- AWS Lambda, API Gateway (HTTP API), DynamoDB, S3, Cognito, SQS, EventBridge, AWS Transcribe
+- CloudWatch: structured logs, EMF metrics, dashboards, alarms, X-Ray
+- Terraform for everything above
+- pytest + moto, ruff, GitHub Actions
+
+## Repository layout
+
+```
+src/          Lambda functions and shared library
+infra/        Terraform (modules are extracted as the pipeline grows)
+tests/        unit and moto-based integration tests
+scripts/      load testing and maintenance scripts
+docs/         architecture decisions, runbook, cost model
+```
+
+## Roadmap
+
+1. Repository and IaC foundation
+2. Jobs API: DynamoDB single-table + FastAPI on Lambda
+3. Cognito authorizer and presigned uploads
+4. Pipeline, part 1: S3 events → SQS → worker with idempotency
+5. Pipeline, part 2: transcription → scoring → results
+6. Fault tolerance and scaling: alarms, retries, concurrency controls
+7. Operations: dashboard, runbook, cost model, load test
