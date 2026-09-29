@@ -55,6 +55,15 @@ Single DynamoDB table (`PAY_PER_REQUEST`, PITR enabled, TTL on `expires_at`):
   guarded by conditional writes, so a stale worker replay loses the race instead of corrupting
   the state
 
+## API
+
+- `POST /jobs` — create a job (`filename`, `content_type`); returns the job record
+- `GET /jobs` — the caller's jobs, newest first; cursor pagination via `limit` (1–100) and `cursor`
+- `GET /jobs/{job_id}` — a single job; other users' jobs return 404
+
+Identity comes from the Cognito JWT validated by the API Gateway authorizer
+(Terraform wiring lands with the function deployment step).
+
 ## Stack
 
 - Python 3.12, FastAPI, boto3
