@@ -1,4 +1,4 @@
-.PHONY: install lint fmt test tf-fmt tf-validate
+.PHONY: install lint fmt test tf-fmt tf-validate package-api
 
 install:
 	python -m pip install "pytest>=8.0" "ruff>=0.6"
@@ -18,3 +18,12 @@ tf-fmt:
 tf-validate:
 	terraform -chdir=infra init -backend=false
 	terraform -chdir=infra validate
+
+# Assemble .build/api for `terraform apply`: function code plus Linux/py3.12
+# wheels so the zip works inside the Lambda runtime (no Docker needed).
+package-api:
+	rm -rf .build
+	mkdir -p .build/api
+	cp -r src/. .build/api/
+	python -m pip install -r requirements-api.txt -t .build/api -q \
+		--platform manylinux2014_x86_64 --only-binary=:all: --python-version 3.12
