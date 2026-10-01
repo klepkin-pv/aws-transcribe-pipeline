@@ -24,6 +24,11 @@ class FakeJwtClaims:
         await self.app(scope, receive, send)
 
 
+@pytest.fixture(autouse=True)
+def uploads_bucket(monkeypatch):
+    monkeypatch.setenv("UPLOADS_BUCKET", "uploads-test")
+
+
 @pytest.fixture
 def clock():
     """Each POST gets a distinct minute so the newest-first order is deterministic."""
@@ -55,6 +60,24 @@ def test_create_job_returns_201(client):
     assert body["status"] == "created"
     assert body["filename"] == "interview.mp3"
     assert "pk" not in body and "gsi1pk" not in body
+
+
+def test_create_job_returns_presigned_url(client):
+    created = client.post(
+        "/jobs", json={"filename": "interview.mp3", "content_type": "audio/mpeg"}
+    ).json()
+
+    assert created["object_key"] == f"uploads/sub-1/{created['job_id']}/interview.mp3"
+    assert f"/{created['object_key']}" in created["upload_url"]
+    assert "uploads-test" in created["upload_url"]
+    assert "X-Amz-Signature" in created["upload_url"]
+
+
+def test_create_job_rejects_unsafe_filenames(client):
+    for bad in ("../evil.mp3", ".hidden.mp3", "a/b.mp3"):
+        response = client.post("/jobs", json={"filename": bad, "content_type": "audio/mpeg"})
+
+        assert response.status_code == 422
 
 
 def test_create_job_requires_filename(client):

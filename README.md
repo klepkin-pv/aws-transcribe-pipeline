@@ -64,6 +64,17 @@ Single DynamoDB table (`PAY_PER_REQUEST`, PITR enabled, TTL on `expires_at`):
 Identity comes from the Cognito JWT validated by the API Gateway authorizer
 (Terraform wiring lands with the function deployment step).
 
+## Upload flow
+
+1. `POST /jobs` creates the job and returns a presigned S3 `PUT` URL scoped to
+   `uploads/<sub>/<job_id>/<filename>` (valid for 15 minutes).
+2. The client uploads the file straight to S3 — the file never passes through Lambda.
+3. The `ObjectCreated` event kicks off the pipeline (see roadmap, day 4).
+
+`filename` is restricted to `[A-Za-z0-9][A-Za-z0-9._-]*` — no path separators, no leading
+dots, so it cannot escape the caller's prefix. The signature pins `Content-Type`, and the
+Lambda role holds `s3:PutObject` only under `uploads/*`.
+
 ## Stack
 
 - Python 3.12, FastAPI, boto3

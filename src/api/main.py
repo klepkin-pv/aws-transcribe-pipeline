@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from functools import lru_cache
-from typing import Annotated
+from typing import Annotated, Any
 
 import boto3
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
@@ -23,6 +23,7 @@ from lib.storage import (
     JobNotFoundError,
     JobsRepository,
 )
+from lib.uploads import object_key, presigned_upload_url
 
 app = FastAPI(
     title="aws-transcribe-pipeline",
@@ -39,6 +40,16 @@ def _repository() -> JobsRepository:
 
 def get_jobs_repo() -> JobsRepository:
     return _repository()
+
+
+@lru_cache(maxsize=1)
+def _s3_client() -> Any:
+    settings = load_settings()
+    return boto3.client("s3", region_name=settings.aws_region)
+
+
+def get_s3_client() -> Any:
+    return _s3_client()
 
 
 def get_now() -> datetime:
@@ -63,10 +74,12 @@ def get_current_sub(request: Request) -> str:
 RepoDep = Annotated[JobsRepository, Depends(get_jobs_repo)]
 SubDep = Annotated[str, Depends(get_current_sub)]
 NowDep = Annotated[datetime, Depends(get_now)]
+S3Dep = Annotated[Any, Depends(get_s3_client)]
 
 
 class CreateJobRequest(BaseModel):
-    filename: str = Field(min_length=1, max_length=255)
+    # No path separators, no leading dots: the filename lands in the S3 key.
+    filename: str = Field(min_length=1, max_length=255, pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
     content_type: str = Field(min_length=1, max_length=100)
 
 
@@ -82,6 +95,11 @@ class JobResponse(BaseModel):
 class JobListResponse(BaseModel):
     items: list[JobResponse]
     next_cursor: str | None = None
+
+
+class JobCreatedResponse(JobResponse):
+    upload_url: str
+    object_key: str
 
 
 def _to_response(item: JobItem) -> JobResponse:
@@ -112,10 +130,21 @@ def _invalid_transition_handler(request: Request, exc: InvalidTransitionError) -
     )
 
 
-@app.post("/jobs", response_model=JobResponse, status_code=201)
-def create_job(payload: CreateJobRequest, repo: RepoDep, sub: SubDep, now: NowDep) -> JobResponse:
+@app.post("/jobs", response_model=JobCreatedResponse, status_code=201)
+def create_job(
+    payload: CreateJobRequest, repo: RepoDep, sub: SubDep, now: NowDep, s3: S3Dep
+) -> JobCreatedResponse:
     item = repo.create_job(sub, payload.filename, payload.content_type, now)
-    return _to_response(item)
+    settings = load_settings()
+    upload_url = presigned_upload_url(
+        s3, settings.uploads_bucket, sub, item["job_id"], payload.filename, payload.content_type
+    )
+    job = _to_response(item)
+    return JobCreatedResponse(
+        **job.model_dump(),
+        upload_url=upload_url,
+        object_key=object_key(sub, item["job_id"], payload.filename),
+    )
 
 
 @app.get("/jobs", response_model=JobListResponse)
