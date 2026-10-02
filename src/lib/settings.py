@@ -22,6 +22,7 @@ class Settings:
     aws_region: str
     jobs_table: str
     uploads_bucket: str
+    jobs_queue_url: str
 
 
 def load_settings() -> Settings:
@@ -31,4 +32,5 @@ def load_settings() -> Settings:
         aws_region=_env("AWS_REGION", "eu-central-1"),
         jobs_table=_env("JOBS_TABLE", "jobs"),
         uploads_bucket=_env("UPLOADS_BUCKET", ""),
+        jobs_queue_url=_env("JOBS_QUEUE_URL", ""),
     )

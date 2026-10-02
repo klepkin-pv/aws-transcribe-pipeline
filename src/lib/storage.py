@@ -148,7 +148,21 @@ class JobsRepository:
         allowed_from = sorted(
             from_status for from_status, targets in STATE_MACHINE.items() if to_status in targets
         )
-        placeholders = ", ".join(f":s{i}" for i in range(len(allowed_from)))
+        return self._guarded_update(item, allowed_from, to_status, now)
+
+    def revert_to_created(self, job_id: str, now: datetime) -> JobItem:
+        """Compensating action for a failed enqueue: queued -> created.
+
+        Deliberately outside STATE_MACHINE: only the dispatcher's send-failure
+        path may use it, pipeline transitions never go backwards.
+        """
+        item = self.get_job(job_id)
+        return self._guarded_update(item, ["queued"], "created", now)
+
+    def _guarded_update(
+        self, item: JobItem, from_statuses: list[str], to_status: str, now: datetime
+    ) -> JobItem:
+        placeholders = ", ".join(f":s{i}" for i in range(len(from_statuses)))
         try:
             response = self._table.update_item(
                 Key={"pk": item["pk"], "sk": item["sk"]},
@@ -156,7 +170,7 @@ class JobsRepository:
                 ConditionExpression=f"#status IN ({placeholders})",
                 ExpressionAttributeNames={"#status": "status"},
                 ExpressionAttributeValues={
-                    **{f":s{i}": value for i, value in enumerate(allowed_from)},
+                    **{f":s{i}": value for i, value in enumerate(from_statuses)},
                     ":to": to_status,
                     ":now": now.isoformat(),
                 },

@@ -126,3 +126,19 @@ def test_failed_is_terminal(repo):
 
     with pytest.raises(InvalidTransitionError):
         repo.transition(created["job_id"], "queued", ts(2))
+
+
+def test_revert_to_created_from_queued(repo):
+    created = repo.create_job("sub-1", "a.mp3", "audio/mpeg", ts(0))
+    repo.transition(created["job_id"], "queued", ts(1))
+
+    item = repo.revert_to_created(created["job_id"], ts(2))
+
+    assert item["status"] == "created"
+
+
+def test_revert_to_created_rejects_other_states(repo):
+    created = repo.create_job("sub-1", "a.mp3", "audio/mpeg", ts(0))
+
+    with pytest.raises(InvalidTransitionError):
+        repo.revert_to_created(created["job_id"], ts(1))

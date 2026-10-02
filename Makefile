@@ -1,4 +1,4 @@
-.PHONY: install lint fmt test tf-fmt tf-validate package-api
+.PHONY: install lint fmt test tf-fmt tf-validate package-api package-dispatcher package-worker
 
 install:
 	python -m pip install "pytest>=8.0" "ruff>=0.6"
@@ -27,3 +27,14 @@ package-api:
 	cp -r src/. .build/api/
 	python -m pip install -r requirements-api.txt -t .build/api -q \
 		--platform manylinux2014_x86_64 --only-binary=:all: --python-version 3.12
+
+# Dispatcher and worker run on stdlib + the Lambda-provided boto3.
+package-dispatcher:
+	rm -rf .build/dispatcher
+	mkdir -p .build/dispatcher
+	cp -r src/. .build/dispatcher/
+
+package-worker:
+	rm -rf .build/worker
+	mkdir -p .build/worker
+	cp -r src/. .build/worker/
