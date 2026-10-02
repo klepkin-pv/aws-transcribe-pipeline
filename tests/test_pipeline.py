@@ -9,6 +9,8 @@ from moto import mock_aws
 
 from dispatcher import handler as dispatcher_module
 from dispatcher.handler import handler as dispatch
+from worker import handler as worker_module
+from worker.handler import handler as work
 
 
 def ts(minute: int) -> datetime:
@@ -28,6 +30,7 @@ def pipeline(repo, monkeypatch):
         monkeypatch.setenv("UPLOADS_BUCKET", "uploads-test")
         monkeypatch.setattr(dispatcher_module, "_jobs_repo", lambda: repo)
         monkeypatch.setattr(dispatcher_module, "_sqs", lambda: sqs)
+        monkeypatch.setattr(worker_module, "_jobs_repo", lambda: repo)
         yield {"repo": repo, "sqs": sqs, "queue_url": queue_url}
 
 
@@ -95,3 +98,56 @@ def test_dispatcher_rolls_back_status_when_sqs_is_down(pipeline, monkeypatch):
         dispatch(s3_event("uploads-test", f"uploads/sub-1/{job['job_id']}/a.mp3"), {})
 
     assert pipeline["repo"].get_job(job["job_id"])["status"] == "created"
+
+
+def sqs_record(message_id: str, body) -> dict:
+    raw_body = body if isinstance(body, str) else json.dumps(body)
+    return {"messageId": message_id, "body": raw_body}
+
+
+def test_worker_claims_queued_job(pipeline):
+    job = pipeline["repo"].create_job("sub-1", "a.mp3", "audio/mpeg", ts(0))
+    pipeline["repo"].transition(job["job_id"], "queued", ts(1))
+
+    event = {"Records": [sqs_record("m1", {"job_id": job["job_id"]})]}
+    result = work(event, {})
+
+    assert result == {"batchItemFailures": []}
+    assert pipeline["repo"].get_job(job["job_id"])["status"] == "processing"
+
+
+def test_worker_duplicate_delivery_in_batch_is_skipped(pipeline):
+    job = pipeline["repo"].create_job("sub-1", "a.mp3", "audio/mpeg", ts(0))
+    pipeline["repo"].transition(job["job_id"], "queued", ts(1))
+
+    event = {
+        "Records": [
+            sqs_record("m1", {"job_id": job["job_id"]}),
+            sqs_record("m2", {"job_id": job["job_id"]}),
+        ]
+    }
+    result = work(event, {})
+
+    assert result == {"batchItemFailures": []}
+
+
+def test_worker_reports_poison_message(pipeline):
+    job = pipeline["repo"].create_job("sub-1", "a.mp3", "audio/mpeg", ts(0))
+    pipeline["repo"].transition(job["job_id"], "queued", ts(1))
+
+    event = {
+        "Records": [
+            sqs_record("good", {"job_id": job["job_id"]}),
+            sqs_record("poison", "not-json"),
+        ]
+    }
+    result = work(event, {})
+
+    assert result == {"batchItemFailures": [{"itemIdentifier": "poison"}]}
+    assert pipeline["repo"].get_job(job["job_id"])["status"] == "processing"
+
+
+def test_worker_skips_unknown_job(pipeline):
+    event = {"Records": [sqs_record("m1", {"job_id": "missing"})]}
+
+    assert work(event, {}) == {"batchItemFailures": []}

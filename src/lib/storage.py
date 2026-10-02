@@ -26,9 +26,12 @@ JOB_TTL_DAYS = 30
 
 # Forward edges of the job state machine. `failed` is reachable from every
 # non-terminal state; terminal states have no outgoing edges.
+# `processing` accepts created/uploading/queued because the dispatcher's
+# queued transition and the queue message are not atomic: a worker may claim
+# a job whose enqueue already happened but whose queued marker raced.
 STATE_MACHINE: dict[str, set[str]] = {
-    "created": {"uploading", "queued", "failed"},
-    "uploading": {"queued", "failed"},
+    "created": {"uploading", "queued", "processing", "failed"},
+    "uploading": {"queued", "processing", "failed"},
     "queued": {"processing", "failed"},
     "processing": {"transcribing", "failed"},
     "transcribing": {"scoring", "failed"},

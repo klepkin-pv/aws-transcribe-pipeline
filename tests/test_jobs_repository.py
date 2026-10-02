@@ -128,6 +128,14 @@ def test_failed_is_terminal(repo):
         repo.transition(created["job_id"], "queued", ts(2))
 
 
+def test_processing_reachable_from_created(repo):
+    created = repo.create_job("sub-1", "a.mp3", "audio/mpeg", ts(0))
+
+    item = repo.transition(created["job_id"], "processing", ts(1))
+
+    assert item["status"] == "processing"
+
+
 def test_revert_to_created_from_queued(repo):
     created = repo.create_job("sub-1", "a.mp3", "audio/mpeg", ts(0))
     repo.transition(created["job_id"], "queued", ts(1))
