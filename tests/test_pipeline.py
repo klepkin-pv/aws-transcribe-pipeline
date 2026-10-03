@@ -9,9 +9,20 @@ from moto import mock_aws
 
 from dispatcher import handler as dispatcher_module
 from dispatcher.handler import handler as dispatch
+from finalizer import handler as finalizer_module
+from finalizer.handler import handler as finalize
 from lib.providers.transcription import FakeTranscriptionProvider, TranscribeProvider
 from worker import handler as worker_module
 from worker.handler import handler as work
+
+
+class StubScoring:
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    def score(self, transcript: str) -> dict:
+        self.calls.append(transcript)
+        return {"score": 87, "summary": "solid candidate"}
 
 
 def ts(minute: int) -> datetime:
@@ -28,17 +39,22 @@ def pipeline(repo, monkeypatch):
         sqs = boto3.client("sqs", region_name="eu-central-1")
         queue_url = sqs.create_queue(QueueName="jobs-test")["QueueUrl"]
         transcription = FakeTranscriptionProvider()
+        scoring = StubScoring()
         monkeypatch.setenv("JOBS_QUEUE_URL", queue_url)
         monkeypatch.setenv("UPLOADS_BUCKET", "uploads-test")
         monkeypatch.setattr(dispatcher_module, "_jobs_repo", lambda: repo)
         monkeypatch.setattr(dispatcher_module, "_sqs", lambda: sqs)
         monkeypatch.setattr(worker_module, "_jobs_repo", lambda: repo)
         monkeypatch.setattr(worker_module, "_transcription", lambda: transcription)
+        monkeypatch.setattr(finalizer_module, "_jobs_repo", lambda: repo)
+        monkeypatch.setattr(finalizer_module, "_transcription", lambda: transcription)
+        monkeypatch.setattr(finalizer_module, "_scoring", lambda: scoring)
         yield {
             "repo": repo,
             "sqs": sqs,
             "queue_url": queue_url,
             "transcription": transcription,
+            "scoring": scoring,
         }
 
 
@@ -186,3 +202,91 @@ def test_worker_reports_unsupported_media(pipeline, monkeypatch):
 
     assert result == {"batchItemFailures": [{"itemIdentifier": "m1"}]}
     assert pipeline["repo"].get_job(job["job_id"])["status"] == "queued"
+
+
+def transcribe_event(job_id: str, status: str, reason: str | None = None) -> dict:
+    detail: dict = {"TranscriptionJobName": f"job-{job_id}", "TranscriptionJobStatus": status}
+    if reason:
+        detail["FailureReason"] = reason
+    return {"detail": detail}
+
+
+def test_finalizer_completes_job_with_results(pipeline):
+    job = pipeline["repo"].create_job("sub-1", "a.mp3", "audio/mpeg", ts(0))
+    for status in ("queued", "processing", "transcribing"):
+        pipeline["repo"].transition(job["job_id"], status, ts(1))
+
+    result = finalize(transcribe_event(job["job_id"], "COMPLETED"), {})
+
+    assert result == {"status": "done", "score": 87}
+    item = pipeline["repo"].get_job(job["job_id"])
+    assert item["status"] == "done"
+    assert item["score"] == 87
+    assert item["summary"] == "solid candidate"
+    assert pipeline["scoring"].calls == ["fake transcript text"]
+
+
+def test_finalizer_marks_failed_on_transcribe_failure(pipeline):
+    job = pipeline["repo"].create_job("sub-1", "a.mp3", "audio/mpeg", ts(0))
+    for status in ("queued", "processing", "transcribing"):
+        pipeline["repo"].transition(job["job_id"], status, ts(1))
+
+    result = finalize(transcribe_event(job["job_id"], "FAILED", reason="bad audio"), {})
+
+    assert result == {"status": "failed", "reason": "bad audio"}
+    item = pipeline["repo"].get_job(job["job_id"])
+    assert item["status"] == "failed"
+    assert item["failure_reason"] == "bad audio"
+
+
+def test_finalizer_skips_duplicate_event_after_done(pipeline):
+    job = pipeline["repo"].create_job("sub-1", "a.mp3", "audio/mpeg", ts(0))
+    for status in ("queued", "processing", "transcribing"):
+        pipeline["repo"].transition(job["job_id"], status, ts(1))
+    finalize(transcribe_event(job["job_id"], "COMPLETED"), {})
+
+    result = finalize(transcribe_event(job["job_id"], "COMPLETED"), {})
+
+    assert result == {"skipped": True}
+    assert pipeline["repo"].get_job(job["job_id"])["status"] == "done"
+
+
+def test_finalizer_marks_failed_when_scoring_fails(pipeline, monkeypatch):
+    class BrokenScoring:
+        def score(self, transcript: str) -> dict:
+            raise RuntimeError("llm down")
+
+    monkeypatch.setattr(finalizer_module, "_scoring", lambda: BrokenScoring())
+    job = pipeline["repo"].create_job("sub-1", "a.mp3", "audio/mpeg", ts(0))
+    for status in ("queued", "processing", "transcribing"):
+        pipeline["repo"].transition(job["job_id"], status, ts(1))
+
+    result = finalize(transcribe_event(job["job_id"], "COMPLETED"), {})
+
+    assert result == {"status": "failed", "reason": "scoring failed"}
+    item = pipeline["repo"].get_job(job["job_id"])
+    assert item["status"] == "failed"
+    assert item["failure_reason"] == "scoring failed"
+
+
+def test_finalizer_resumes_job_stuck_in_scoring(pipeline):
+    job = pipeline["repo"].create_job("sub-1", "a.mp3", "audio/mpeg", ts(0))
+    for status in ("queued", "processing", "scoring"):
+        pipeline["repo"].transition(job["job_id"], status, ts(1))
+
+    result = finalize(transcribe_event(job["job_id"], "COMPLETED"), {})
+
+    assert result == {"status": "done", "score": 87}
+    assert pipeline["repo"].get_job(job["job_id"])["status"] == "done"
+
+
+def test_finalizer_skips_foreign_and_unknown_jobs(pipeline):
+    foreign = {
+        "detail": {
+            "TranscriptionJobName": "someone-elses-job",
+            "TranscriptionJobStatus": "COMPLETED",
+        }
+    }
+
+    assert finalize(foreign, {}) == {"skipped": True}
+    assert finalize(transcribe_event("missing", "COMPLETED"), {}) == {"skipped": True}

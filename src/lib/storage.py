@@ -29,11 +29,13 @@ JOB_TTL_DAYS = 30
 # `processing` accepts created/uploading/queued because the dispatcher's
 # queued transition and the queue message are not atomic: a worker may claim
 # a job whose enqueue already happened but whose queued marker raced.
+# `scoring` is reachable from processing too: the finalizer may beat the
+# worker's transcribing marker.
 STATE_MACHINE: dict[str, set[str]] = {
     "created": {"uploading", "queued", "processing", "failed"},
     "uploading": {"queued", "processing", "failed"},
     "queued": {"processing", "failed"},
-    "processing": {"transcribing", "failed"},
+    "processing": {"transcribing", "scoring", "failed"},
     "transcribing": {"scoring", "failed"},
     "scoring": {"done", "failed"},
     "done": set(),
@@ -138,8 +140,13 @@ class JobsRepository:
             return items, _encode_cursor(response["LastEvaluatedKey"])
         return items, None
 
-    def transition(self, job_id: str, to_status: str, now: datetime) -> JobItem:
+    def transition(
+        self, job_id: str, to_status: str, now: datetime, extra: dict[str, Any] | None = None
+    ) -> JobItem:
         """Move a job to `to_status` if the current status allows it.
+
+        `extra` attributes (score, summary, failure_reason) are written in the
+        same atomic update as the status change.
 
         Read-then-write by design: the caller gets the fresh item either way,
         and the server-side condition makes the update atomic.
@@ -151,7 +158,7 @@ class JobsRepository:
         allowed_from = sorted(
             from_status for from_status, targets in STATE_MACHINE.items() if to_status in targets
         )
-        return self._guarded_update(item, allowed_from, to_status, now)
+        return self._guarded_update(item, allowed_from, to_status, now, extra)
 
     def revert_to_created(self, job_id: str, now: datetime) -> JobItem:
         """Compensating action for a failed enqueue: queued -> created.
@@ -163,20 +170,35 @@ class JobsRepository:
         return self._guarded_update(item, ["queued"], "created", now)
 
     def _guarded_update(
-        self, item: JobItem, from_statuses: list[str], to_status: str, now: datetime
+        self,
+        item: JobItem,
+        from_statuses: list[str],
+        to_status: str,
+        now: datetime,
+        extra: dict[str, Any] | None = None,
     ) -> JobItem:
         placeholders = ", ".join(f":s{i}" for i in range(len(from_statuses)))
+        update_expression = "SET #status = :to, updated_at = :now"
+        names: dict[str, str] = {"#status": "status"}
+        values: dict[str, Any] = {
+            **{f":s{i}": value for i, value in enumerate(from_statuses)},
+            ":to": to_status,
+            ":now": now.isoformat(),
+        }
+        for name, value in (extra or {}).items():
+            if not name.isidentifier():
+                raise ValueError(f"invalid attribute name: {name}")
+            update_expression += f", #{name} = :{name}"
+            names[f"#{name}"] = name
+            values[f":{name}"] = value
+
         try:
             response = self._table.update_item(
                 Key={"pk": item["pk"], "sk": item["sk"]},
-                UpdateExpression="SET #status = :to, updated_at = :now",
+                UpdateExpression=update_expression,
                 ConditionExpression=f"#status IN ({placeholders})",
-                ExpressionAttributeNames={"#status": "status"},
-                ExpressionAttributeValues={
-                    **{f":s{i}": value for i, value in enumerate(from_statuses)},
-                    ":to": to_status,
-                    ":now": now.isoformat(),
-                },
+                ExpressionAttributeNames=names,
+                ExpressionAttributeValues=values,
                 ReturnValues="ALL_NEW",
             )
         except ClientError as exc:

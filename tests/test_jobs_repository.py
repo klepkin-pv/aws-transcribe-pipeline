@@ -128,6 +128,20 @@ def test_failed_is_terminal(repo):
         repo.transition(created["job_id"], "queued", ts(2))
 
 
+def test_transition_extra_attributes(repo):
+    created = repo.create_job("sub-1", "a.mp3", "audio/mpeg", ts(0))
+    for status in ("queued", "processing", "transcribing", "scoring"):
+        repo.transition(created["job_id"], status, ts(1))
+
+    item = repo.transition(
+        created["job_id"], "done", ts(2), extra={"score": 87, "summary": "good"}
+    )
+
+    assert item["status"] == "done"
+    assert item["score"] == 87
+    assert item["summary"] == "good"
+
+
 def test_processing_reachable_from_created(repo):
     created = repo.create_job("sub-1", "a.mp3", "audio/mpeg", ts(0))
 

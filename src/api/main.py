@@ -90,6 +90,9 @@ class JobResponse(BaseModel):
     content_type: str
     created_at: str
     updated_at: str
+    score: int | None = None
+    summary: str | None = None
+    failure_reason: str | None = None
 
 
 class JobListResponse(BaseModel):
@@ -110,6 +113,9 @@ def _to_response(item: JobItem) -> JobResponse:
         content_type=item["content_type"],
         created_at=item["created_at"],
         updated_at=item["updated_at"],
+        score=item.get("score"),
+        summary=item.get("summary"),
+        failure_reason=item.get("failure_reason"),
     )
 
 
