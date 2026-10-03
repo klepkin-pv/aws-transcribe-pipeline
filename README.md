@@ -10,7 +10,8 @@ event-driven processing, scaling, fault tolerance and day-2 operations, all defi
 
 ## Status
 
-Work in progress. The pipeline is being built incrementally; every commit keeps CI green.
+The pipeline is complete and covered by moto-based tests; every commit keeps CI green.
+Deployment, load numbers and cost data follow once the AWS account exists.
 
 ## Architecture (draft)
 
@@ -69,7 +70,11 @@ Identity comes from the Cognito JWT validated by the API Gateway authorizer
 1. `POST /jobs` creates the job and returns a presigned S3 `PUT` URL scoped to
    `uploads/<sub>/<job_id>/<filename>` (valid for 15 minutes).
 2. The client uploads the file straight to S3 — the file never passes through Lambda.
-3. The `ObjectCreated` event kicks off the pipeline (see roadmap, day 4).
+3. The `ObjectCreated` event starts the pipeline: dispatcher → SQS → worker starts an
+   AWS Transcribe job → EventBridge delivers the completion event → the finalizer scores
+   the transcript with a Bedrock model and writes the result atomically.
+4. `GET /jobs/{id}` returns the final status with `score` and `summary`, or
+   `failure_reason` for failed jobs.
 
 `filename` is restricted to `[A-Za-z0-9][A-Za-z0-9._-]*` — no path separators, no leading
 dots, so it cannot escape the caller's prefix. The signature pins `Content-Type`, and the

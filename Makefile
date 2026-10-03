@@ -1,4 +1,4 @@
-.PHONY: install lint fmt test tf-fmt tf-validate package-api package-dispatcher package-worker
+.PHONY: install lint fmt test tf-fmt tf-validate package-api package-dispatcher package-worker package-finalizer
 
 install:
 	python -m pip install "pytest>=8.0" "ruff>=0.6"
@@ -38,3 +38,8 @@ package-worker:
 	rm -rf .build/worker
 	mkdir -p .build/worker
 	cp -r src/. .build/worker/
+
+package-finalizer:
+	rm -rf .build/finalizer
+	mkdir -p .build/finalizer
+	cp -r src/. .build/finalizer/

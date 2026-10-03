@@ -21,3 +21,9 @@ variable "transcribe_language" {
   type        = string
   default     = "ru-RU"
 }
+
+variable "bedrock_model_id" {
+  description = "Bedrock model id for transcript scoring; empty means scoring is not configured yet."
+  type        = string
+  default     = ""
+}
