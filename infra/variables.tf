@@ -15,3 +15,9 @@ variable "environment" {
   type        = string
   default     = "dev"
 }
+
+variable "transcribe_language" {
+  description = "Language code for AWS Transcribe jobs."
+  type        = string
+  default     = "ru-RU"
+}

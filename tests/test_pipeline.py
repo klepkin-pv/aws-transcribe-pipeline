@@ -9,6 +9,7 @@ from moto import mock_aws
 
 from dispatcher import handler as dispatcher_module
 from dispatcher.handler import handler as dispatch
+from lib.providers.transcription import FakeTranscriptionProvider, TranscribeProvider
 from worker import handler as worker_module
 from worker.handler import handler as work
 
@@ -26,12 +27,19 @@ def pipeline(repo, monkeypatch):
     with mock_aws():
         sqs = boto3.client("sqs", region_name="eu-central-1")
         queue_url = sqs.create_queue(QueueName="jobs-test")["QueueUrl"]
+        transcription = FakeTranscriptionProvider()
         monkeypatch.setenv("JOBS_QUEUE_URL", queue_url)
         monkeypatch.setenv("UPLOADS_BUCKET", "uploads-test")
         monkeypatch.setattr(dispatcher_module, "_jobs_repo", lambda: repo)
         monkeypatch.setattr(dispatcher_module, "_sqs", lambda: sqs)
         monkeypatch.setattr(worker_module, "_jobs_repo", lambda: repo)
-        yield {"repo": repo, "sqs": sqs, "queue_url": queue_url}
+        monkeypatch.setattr(worker_module, "_transcription", lambda: transcription)
+        yield {
+            "repo": repo,
+            "sqs": sqs,
+            "queue_url": queue_url,
+            "transcription": transcription,
+        }
 
 
 def _messages(pipeline: dict) -> list:
@@ -105,49 +113,76 @@ def sqs_record(message_id: str, body) -> dict:
     return {"messageId": message_id, "body": raw_body}
 
 
-def test_worker_claims_queued_job(pipeline):
+def sqs_job_message(message_id: str, job_id: str, key: str) -> dict:
+    return sqs_record(message_id, {"job_id": job_id, "bucket": "uploads-test", "object_key": key})
+
+
+def test_worker_starts_transcription(pipeline):
     job = pipeline["repo"].create_job("sub-1", "a.mp3", "audio/mpeg", ts(0))
     pipeline["repo"].transition(job["job_id"], "queued", ts(1))
+    key = f"uploads/sub-1/{job['job_id']}/a.mp3"
 
-    event = {"Records": [sqs_record("m1", {"job_id": job["job_id"]})]}
-    result = work(event, {})
+    result = work({"Records": [sqs_job_message("m1", job["job_id"], key)]}, {})
 
     assert result == {"batchItemFailures": []}
-    assert pipeline["repo"].get_job(job["job_id"])["status"] == "processing"
+    assert pipeline["repo"].get_job(job["job_id"])["status"] == "transcribing"
+    assert pipeline["transcription"].started == [(job["job_id"], "uploads-test", key)]
 
 
 def test_worker_duplicate_delivery_in_batch_is_skipped(pipeline):
     job = pipeline["repo"].create_job("sub-1", "a.mp3", "audio/mpeg", ts(0))
     pipeline["repo"].transition(job["job_id"], "queued", ts(1))
+    key = f"uploads/sub-1/{job['job_id']}/a.mp3"
 
     event = {
         "Records": [
-            sqs_record("m1", {"job_id": job["job_id"]}),
-            sqs_record("m2", {"job_id": job["job_id"]}),
+            sqs_job_message("m1", job["job_id"], key),
+            sqs_job_message("m2", job["job_id"], key),
         ]
     }
     result = work(event, {})
 
     assert result == {"batchItemFailures": []}
+    assert pipeline["repo"].get_job(job["job_id"])["status"] == "transcribing"
 
 
 def test_worker_reports_poison_message(pipeline):
     job = pipeline["repo"].create_job("sub-1", "a.mp3", "audio/mpeg", ts(0))
     pipeline["repo"].transition(job["job_id"], "queued", ts(1))
+    key = f"uploads/sub-1/{job['job_id']}/a.mp3"
 
     event = {
         "Records": [
-            sqs_record("good", {"job_id": job["job_id"]}),
+            sqs_job_message("good", job["job_id"], key),
             sqs_record("poison", "not-json"),
         ]
     }
     result = work(event, {})
 
     assert result == {"batchItemFailures": [{"itemIdentifier": "poison"}]}
-    assert pipeline["repo"].get_job(job["job_id"])["status"] == "processing"
+    assert pipeline["repo"].get_job(job["job_id"])["status"] == "transcribing"
 
 
-def test_worker_skips_unknown_job(pipeline):
-    event = {"Records": [sqs_record("m1", {"job_id": "missing"})]}
+def test_worker_skips_unknown_job_without_starting_transcription(pipeline):
+    result = work({"Records": [sqs_job_message("m1", "missing", "uploads/s/m/a.mp3")]}, {})
 
-    assert work(event, {}) == {"batchItemFailures": []}
+    assert result == {"batchItemFailures": []}
+    assert pipeline["transcription"].started == []
+
+
+def test_worker_reports_unsupported_media(pipeline, monkeypatch):
+    # The real provider validates the media format before any AWS call,
+    # so None clients are safe here.
+    monkeypatch.setattr(
+        worker_module,
+        "_transcription",
+        lambda: TranscribeProvider(None, None, "uploads-test", "ru-RU"),
+    )
+    job = pipeline["repo"].create_job("sub-1", "notes.txt", "text/plain", ts(0))
+    pipeline["repo"].transition(job["job_id"], "queued", ts(1))
+    key = f"uploads/sub-1/{job['job_id']}/notes.txt"
+
+    result = work({"Records": [sqs_job_message("m1", job["job_id"], key)]}, {})
+
+    assert result == {"batchItemFailures": [{"itemIdentifier": "m1"}]}
+    assert pipeline["repo"].get_job(job["job_id"])["status"] == "queued"

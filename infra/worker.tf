@@ -42,6 +42,20 @@ resource "aws_iam_role_policy" "worker" {
         Resource = aws_sqs_queue.jobs.arn
       },
       {
+        # Transcribe has no resource-level permissions.
+        Sid      = "StartTranscription"
+        Effect   = "Allow"
+        Action   = ["transcribe:StartTranscriptionJob"]
+        Resource = "*"
+      },
+      {
+        # Output bucket for Transcribe job results.
+        Sid      = "WriteTranscriptOutput"
+        Effect   = "Allow"
+        Action   = ["s3:PutObject"]
+        Resource = "${aws_s3_bucket.uploads.arn}/transcripts/*"
+      },
+      {
         Sid      = "Logs"
         Effect   = "Allow"
         Action   = ["logs:CreateLogStream", "logs:PutLogEvents"]
@@ -68,9 +82,11 @@ resource "aws_lambda_function" "worker" {
 
   environment {
     variables = {
-      PROJECT_NAME = var.project_name
-      ENVIRONMENT  = var.environment
-      JOBS_TABLE   = aws_dynamodb_table.jobs.name
+      PROJECT_NAME        = var.project_name
+      ENVIRONMENT         = var.environment
+      JOBS_TABLE          = aws_dynamodb_table.jobs.name
+      TRANSCRIBE_LANGUAGE = var.transcribe_language
+      UPLOADS_BUCKET      = aws_s3_bucket.uploads.id
     }
   }
 
