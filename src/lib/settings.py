@@ -23,6 +23,8 @@ class Settings:
     jobs_table: str
     uploads_bucket: str
     jobs_queue_url: str
+    transcribe_language: str
+    bedrock_model_id: str
 
 
 def load_settings() -> Settings:
@@ -33,4 +35,6 @@ def load_settings() -> Settings:
         jobs_table=_env("JOBS_TABLE", "jobs"),
         uploads_bucket=_env("UPLOADS_BUCKET", ""),
         jobs_queue_url=_env("JOBS_QUEUE_URL", ""),
+        transcribe_language=_env("TRANSCRIBE_LANGUAGE", "ru-RU"),
+        bedrock_model_id=_env("BEDROCK_MODEL_ID", ""),
     )
