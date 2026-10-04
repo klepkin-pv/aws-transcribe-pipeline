@@ -2,6 +2,7 @@
 
 import json
 from datetime import UTC, datetime
+from types import SimpleNamespace
 
 import boto3
 import pytest
@@ -27,6 +28,18 @@ class StubScoring:
 
 def ts(minute: int) -> datetime:
     return datetime(2026, 9, 28, 12, minute, tzinfo=UTC)
+
+
+def lambda_context() -> SimpleNamespace:
+    """Minimal stand-in for the Lambda context object powertools reads."""
+    return SimpleNamespace(
+        aws_request_id="test-request",
+        function_name="test",
+        memory_limit_in_mb=256,
+        function_version="$LATEST",
+        invoked_function_arn="arn:aws:lambda:eu-central-1:123456789012:function:test",
+        get_remaining_time_in_millis=lambda: 3000,
+    )
 
 
 def s3_event(bucket: str, key: str) -> dict:
@@ -68,7 +81,9 @@ def _messages(pipeline: dict) -> list:
 def test_dispatcher_enqueues_created_job(pipeline):
     job = pipeline["repo"].create_job("sub-1", "a.mp3", "audio/mpeg", ts(0))
 
-    result = dispatch(s3_event("uploads-test", f"uploads/sub-1/{job['job_id']}/a.mp3"), {})
+    result = dispatch(
+        s3_event("uploads-test", f"uploads/sub-1/{job['job_id']}/a.mp3"), lambda_context()
+    )
 
     assert result == {"enqueued": 1}
     messages = _messages(pipeline)
@@ -83,27 +98,29 @@ def test_dispatcher_skips_duplicate_event(pipeline):
     job = pipeline["repo"].create_job("sub-1", "a.mp3", "audio/mpeg", ts(0))
     event = s3_event("uploads-test", f"uploads/sub-1/{job['job_id']}/a.mp3")
 
-    assert dispatch(event, {}) == {"enqueued": 1}
-    assert dispatch(event, {}) == {"enqueued": 0}
+    assert dispatch(event, lambda_context()) == {"enqueued": 1}
+    assert dispatch(event, lambda_context()) == {"enqueued": 0}
 
     assert len(_messages(pipeline)) == 1
 
 
 def test_dispatcher_skips_orphan_object(pipeline):
-    result = dispatch(s3_event("uploads-test", "uploads/sub-1/unknown-id/a.mp3"), {})
+    result = dispatch(s3_event("uploads-test", "uploads/sub-1/unknown-id/a.mp3"), lambda_context())
 
     assert result == {"enqueued": 0}
     assert _messages(pipeline) == []
 
 
 def test_dispatcher_skips_malformed_key(pipeline):
-    assert dispatch(s3_event("uploads-test", "some/other.bin"), {}) == {"enqueued": 0}
+    assert dispatch(s3_event("uploads-test", "some/other.bin"), lambda_context()) == {"enqueued": 0}
 
 
 def test_dispatcher_skips_foreign_bucket(pipeline):
     job = pipeline["repo"].create_job("sub-1", "a.mp3", "audio/mpeg", ts(0))
 
-    result = dispatch(s3_event("other-bucket", f"uploads/sub-1/{job['job_id']}/a.mp3"), {})
+    result = dispatch(
+        s3_event("other-bucket", f"uploads/sub-1/{job['job_id']}/a.mp3"), lambda_context()
+    )
 
     assert result == {"enqueued": 0}
     assert pipeline["repo"].get_job(job["job_id"])["status"] == "created"
@@ -119,7 +136,7 @@ def test_dispatcher_rolls_back_status_when_sqs_is_down(pipeline, monkeypatch):
     monkeypatch.setattr(dispatcher_module, "_sqs", lambda: BrokenSqs())
 
     with pytest.raises(RuntimeError):
-        dispatch(s3_event("uploads-test", f"uploads/sub-1/{job['job_id']}/a.mp3"), {})
+        dispatch(s3_event("uploads-test", f"uploads/sub-1/{job['job_id']}/a.mp3"), lambda_context())
 
     assert pipeline["repo"].get_job(job["job_id"])["status"] == "created"
 
@@ -141,7 +158,7 @@ def test_worker_starts_transcription(pipeline):
     pipeline["repo"].transition(job["job_id"], "queued", ts(1))
     key = f"uploads/sub-1/{job['job_id']}/a.mp3"
 
-    result = work({"Records": [sqs_job_message("m1", job["job_id"], key)]}, {})
+    result = work({"Records": [sqs_job_message("m1", job["job_id"], key)]}, lambda_context())
 
     assert result == {"batchItemFailures": []}
     assert pipeline["repo"].get_job(job["job_id"])["status"] == "transcribing"
@@ -159,7 +176,7 @@ def test_worker_duplicate_delivery_in_batch_is_skipped(pipeline):
             sqs_job_message("m2", job["job_id"], key),
         ]
     }
-    result = work(event, {})
+    result = work(event, lambda_context())
 
     assert result == {"batchItemFailures": []}
     assert pipeline["repo"].get_job(job["job_id"])["status"] == "transcribing"
@@ -176,14 +193,15 @@ def test_worker_reports_poison_message(pipeline):
             sqs_record("poison", "not-json"),
         ]
     }
-    result = work(event, {})
+    result = work(event, lambda_context())
 
     assert result == {"batchItemFailures": [{"itemIdentifier": "poison"}]}
     assert pipeline["repo"].get_job(job["job_id"])["status"] == "transcribing"
 
 
 def test_worker_skips_unknown_job_without_starting_transcription(pipeline):
-    result = work({"Records": [sqs_job_message("m1", "missing", "uploads/s/m/a.mp3")]}, {})
+    event = {"Records": [sqs_job_message("m1", "missing", "uploads/s/m/a.mp3")]}
+    result = work(event, lambda_context())
 
     assert result == {"batchItemFailures": []}
     assert pipeline["transcription"].started == []
@@ -201,7 +219,7 @@ def test_worker_marks_unsupported_media_failed_without_retry(pipeline, monkeypat
     pipeline["repo"].transition(job["job_id"], "queued", ts(1))
     key = f"uploads/sub-1/{job['job_id']}/notes.txt"
 
-    result = work({"Records": [sqs_job_message("m1", job["job_id"], key)]}, {})
+    result = work({"Records": [sqs_job_message("m1", job["job_id"], key)]}, lambda_context())
 
     assert result == {"batchItemFailures": []}
     item = pipeline["repo"].get_job(job["job_id"])
@@ -219,7 +237,7 @@ def test_worker_retries_transient_errors_before_max_attempts(pipeline, monkeypat
     pipeline["repo"].transition(job["job_id"], "queued", ts(1))
     key = f"uploads/sub-1/{job['job_id']}/a.mp3"
 
-    result = work({"Records": [sqs_job_message("m1", job["job_id"], key)]}, {})
+    result = work({"Records": [sqs_job_message("m1", job["job_id"], key)]}, lambda_context())
 
     assert result == {"batchItemFailures": [{"itemIdentifier": "m1"}]}
     assert pipeline["repo"].get_job(job["job_id"])["status"] == "queued"
@@ -238,7 +256,7 @@ def test_worker_marks_failed_after_max_attempts(pipeline, monkeypatch):
     record = sqs_job_message("m1", job["job_id"], key)
     record["attributes"] = {"ApproximateReceiveCount": "3"}
 
-    result = work({"Records": [record]}, {})
+    result = work({"Records": [record]}, lambda_context())
 
     assert result == {"batchItemFailures": []}
     item = pipeline["repo"].get_job(job["job_id"])
@@ -258,7 +276,7 @@ def test_finalizer_completes_job_with_results(pipeline):
     for status in ("queued", "processing", "transcribing"):
         pipeline["repo"].transition(job["job_id"], status, ts(1))
 
-    result = finalize(transcribe_event(job["job_id"], "COMPLETED"), {})
+    result = finalize(transcribe_event(job["job_id"], "COMPLETED"), lambda_context())
 
     assert result == {"status": "done", "score": 87}
     item = pipeline["repo"].get_job(job["job_id"])
@@ -273,7 +291,8 @@ def test_finalizer_marks_failed_on_transcribe_failure(pipeline):
     for status in ("queued", "processing", "transcribing"):
         pipeline["repo"].transition(job["job_id"], status, ts(1))
 
-    result = finalize(transcribe_event(job["job_id"], "FAILED", reason="bad audio"), {})
+    event = transcribe_event(job["job_id"], "FAILED", reason="bad audio")
+    result = finalize(event, lambda_context())
 
     assert result == {"status": "failed", "reason": "bad audio"}
     item = pipeline["repo"].get_job(job["job_id"])
@@ -285,9 +304,9 @@ def test_finalizer_skips_duplicate_event_after_done(pipeline):
     job = pipeline["repo"].create_job("sub-1", "a.mp3", "audio/mpeg", ts(0))
     for status in ("queued", "processing", "transcribing"):
         pipeline["repo"].transition(job["job_id"], status, ts(1))
-    finalize(transcribe_event(job["job_id"], "COMPLETED"), {})
+    finalize(transcribe_event(job["job_id"], "COMPLETED"), lambda_context())
 
-    result = finalize(transcribe_event(job["job_id"], "COMPLETED"), {})
+    result = finalize(transcribe_event(job["job_id"], "COMPLETED"), lambda_context())
 
     assert result == {"skipped": True}
     assert pipeline["repo"].get_job(job["job_id"])["status"] == "done"
@@ -303,7 +322,7 @@ def test_finalizer_marks_failed_when_scoring_fails(pipeline, monkeypatch):
     for status in ("queued", "processing", "transcribing"):
         pipeline["repo"].transition(job["job_id"], status, ts(1))
 
-    result = finalize(transcribe_event(job["job_id"], "COMPLETED"), {})
+    result = finalize(transcribe_event(job["job_id"], "COMPLETED"), lambda_context())
 
     assert result == {"status": "failed", "reason": "scoring failed"}
     item = pipeline["repo"].get_job(job["job_id"])
@@ -316,7 +335,7 @@ def test_finalizer_resumes_job_stuck_in_scoring(pipeline):
     for status in ("queued", "processing", "scoring"):
         pipeline["repo"].transition(job["job_id"], status, ts(1))
 
-    result = finalize(transcribe_event(job["job_id"], "COMPLETED"), {})
+    result = finalize(transcribe_event(job["job_id"], "COMPLETED"), lambda_context())
 
     assert result == {"status": "done", "score": 87}
     assert pipeline["repo"].get_job(job["job_id"])["status"] == "done"
@@ -330,5 +349,5 @@ def test_finalizer_skips_foreign_and_unknown_jobs(pipeline):
         }
     }
 
-    assert finalize(foreign, {}) == {"skipped": True}
-    assert finalize(transcribe_event("missing", "COMPLETED"), {}) == {"skipped": True}
+    assert finalize(foreign, lambda_context()) == {"skipped": True}
+    assert finalize(transcribe_event("missing", "COMPLETED"), lambda_context()) == {"skipped": True}

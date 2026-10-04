@@ -79,6 +79,10 @@ resource "aws_lambda_function" "api" {
   # concurrency budget shared with the pipeline functions.
   reserved_concurrent_executions = 10
 
+  tracing_config {
+    mode = "Active"
+  }
+
   environment {
     variables = {
       PROJECT_NAME   = var.project_name

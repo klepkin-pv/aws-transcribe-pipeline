@@ -20,12 +20,12 @@ Failure taxonomy:
 from __future__ import annotations
 
 import json
-import logging
 from datetime import UTC, datetime
 from functools import lru_cache
 from typing import Any
 
 import boto3
+from aws_lambda_powertools import Logger, Metrics
 
 from lib.providers.transcription import (
     TranscribeProvider,
@@ -35,8 +35,8 @@ from lib.providers.transcription import (
 from lib.settings import load_settings
 from lib.storage import InvalidTransitionError, JobNotFoundError, JobsRepository
 
-logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
+logger = Logger(service="worker")
+metrics = Metrics(namespace="TranscribePipeline", service="worker")
 
 _MAX_ATTEMPTS = 3
 
@@ -71,8 +71,12 @@ def _mark_failed(repo: JobsRepository, job_id: str, reason: str) -> None:
         repo.transition(job_id, "failed", datetime.now(UTC), extra={"failure_reason": reason})
     except (InvalidTransitionError, JobNotFoundError):
         logger.info("Job %s is already terminal, not marking failed", job_id)
+    else:
+        metrics.add_metric(name="JobFailedPermanently", unit="Count", value=1)
 
 
+@logger.inject_lambda_context
+@metrics.log_metrics(capture_cold_start_metric=True)
 def handler(event: dict, context: Any) -> dict:
     repo = _jobs_repo()
     transcription = _transcription()
@@ -97,6 +101,7 @@ def handler(event: dict, context: Any) -> dict:
             repo.transition(job_id, "processing", datetime.now(UTC))
             repo.transition(job_id, "transcribing", datetime.now(UTC))
             logger.info("Started transcription %s for job %s", job_name, job_id)
+            metrics.add_metric(name="JobClaimed", unit="Count", value=1)
         except (InvalidTransitionError, JobNotFoundError) as exc:
             # Duplicate delivery or an unknown job — not worth a retry.
             logger.info("Skipping message %s: %s", message_id, exc)

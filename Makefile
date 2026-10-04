@@ -1,4 +1,4 @@
-.PHONY: install lint fmt test tf-fmt tf-validate package-api package-dispatcher package-worker package-finalizer
+.PHONY: install lint fmt test tf-fmt tf-validate package-api package-dispatcher package-worker package-finalizer package-layer
 
 install:
 	python -m pip install "pytest>=8.0" "ruff>=0.6"
@@ -43,3 +43,10 @@ package-finalizer:
 	rm -rf .build/finalizer
 	mkdir -p .build/finalizer
 	cp -r src/. .build/finalizer/
+
+# Lambda layer with the shared pipeline dependencies (python/ at zip root).
+package-layer:
+	rm -rf .build/layer
+	mkdir -p .build/layer/python
+	python -m pip install -r requirements-layer.txt -t .build/layer/python -q \
+		--platform manylinux2014_x86_64 --only-binary=:all: --python-version 3.12

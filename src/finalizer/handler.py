@@ -9,20 +9,20 @@ EventBridge retries the delivery and finally parks the event in its DLQ.
 
 from __future__ import annotations
 
-import logging
 from datetime import UTC, datetime
 from functools import lru_cache
 from typing import Any
 
 import boto3
+from aws_lambda_powertools import Logger, Metrics
 
 from lib.providers.scoring import BedrockScoringProvider, ScoringProvider
 from lib.providers.transcription import TranscribeProvider, TranscriptionProvider
 from lib.settings import load_settings
 from lib.storage import InvalidTransitionError, JobNotFoundError, JobsRepository
 
-logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
+logger = Logger(service="finalizer")
+metrics = Metrics(namespace="TranscribePipeline", service="finalizer")
 
 _NAME_PREFIX = "job-"
 
@@ -58,6 +58,8 @@ def _job_id(job_name: str) -> str | None:
     return job_name[len(_NAME_PREFIX):] if job_name.startswith(_NAME_PREFIX) else None
 
 
+@logger.inject_lambda_context
+@metrics.log_metrics(capture_cold_start_metric=True)
 def handler(event: dict, context: Any) -> dict:
     detail = event.get("detail", {})
     job_id = _job_id(detail.get("TranscriptionJobName", ""))
@@ -82,6 +84,7 @@ def handler(event: dict, context: Any) -> dict:
         reason = detail.get("FailureReason") or f"transcription {transcribe_status or 'unknown'}"
         repo.transition(job_id, "failed", now, extra={"failure_reason": reason})
         logger.info("Job %s failed in transcription: %s", job_id, reason)
+        metrics.add_metric(name="JobFailed", unit="Count", value=1)
         return {"status": "failed", "reason": reason}
 
     transcript = _transcription().transcript_text(detail["TranscriptionJobName"])
@@ -96,6 +99,7 @@ def handler(event: dict, context: Any) -> dict:
     except Exception:
         logger.exception("Scoring failed for job %s", job_id)
         repo.transition(job_id, "failed", now, extra={"failure_reason": "scoring failed"})
+        metrics.add_metric(name="JobFailed", unit="Count", value=1)
         return {"status": "failed", "reason": "scoring failed"}
 
     repo.transition(
@@ -105,4 +109,5 @@ def handler(event: dict, context: Any) -> dict:
         extra={"score": result["score"], "summary": result["summary"]},
     )
     logger.info("Job %s done, score %s", job_id, result["score"])
+    metrics.add_metric(name="JobDone", unit="Count", value=1)
     return {"status": "done", "score": result["score"]}

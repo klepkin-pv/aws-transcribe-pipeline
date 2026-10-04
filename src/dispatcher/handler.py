@@ -13,19 +13,19 @@ retry the event.
 from __future__ import annotations
 
 import json
-import logging
 from datetime import UTC, datetime
 from functools import lru_cache
 from typing import Any
 from urllib.parse import unquote_plus
 
 import boto3
+from aws_lambda_powertools import Logger, Metrics
 
 from lib.settings import load_settings
 from lib.storage import InvalidTransitionError, JobNotFoundError, JobsRepository
 
-logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
+logger = Logger(service="dispatcher")
+metrics = Metrics(namespace="TranscribePipeline", service="dispatcher")
 
 
 @lru_cache(maxsize=1)
@@ -66,7 +66,11 @@ def _enqueue(repo: JobsRepository, sqs: Any, job_id: str, bucket: str, key: str)
         repo.revert_to_created(job_id, datetime.now(UTC))
         raise
 
+    metrics.add_metric(name="JobEnqueued", unit="Count", value=1)
 
+
+@logger.inject_lambda_context
+@metrics.log_metrics(capture_cold_start_metric=True)
 def handler(event: dict, context: Any) -> dict:
     repo = _jobs_repo()
     sqs = _sqs()

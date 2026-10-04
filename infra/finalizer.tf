@@ -72,6 +72,12 @@ resource "aws_lambda_function" "finalizer" {
   memory_size      = 256
   timeout          = 30
 
+  layers = [aws_lambda_layer_version.powertools.arn]
+
+  tracing_config {
+    mode = "Active"
+  }
+
   environment {
     variables = {
       PROJECT_NAME        = var.project_name

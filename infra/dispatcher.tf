@@ -68,6 +68,12 @@ resource "aws_lambda_function" "dispatcher" {
   memory_size      = 256
   timeout          = 10
 
+  layers = [aws_lambda_layer_version.powertools.arn]
+
+  tracing_config {
+    mode = "Active"
+  }
+
   environment {
     variables = {
       PROJECT_NAME   = var.project_name

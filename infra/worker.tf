@@ -80,6 +80,12 @@ resource "aws_lambda_function" "worker" {
   memory_size      = 256
   timeout          = 30
 
+  layers = [aws_lambda_layer_version.powertools.arn]
+
+  tracing_config {
+    mode = "Active"
+  }
+
   # SQS scales this function with queue depth; the cap keeps the scale-out
   # predictable for DynamoDB and the Transcribe quota downstream.
   reserved_concurrent_executions = 20
