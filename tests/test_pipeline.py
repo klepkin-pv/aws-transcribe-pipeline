@@ -124,9 +124,12 @@ def test_dispatcher_rolls_back_status_when_sqs_is_down(pipeline, monkeypatch):
     assert pipeline["repo"].get_job(job["job_id"])["status"] == "created"
 
 
-def sqs_record(message_id: str, body) -> dict:
+def sqs_record(message_id: str, body, attributes: dict | None = None) -> dict:
     raw_body = body if isinstance(body, str) else json.dumps(body)
-    return {"messageId": message_id, "body": raw_body}
+    record = {"messageId": message_id, "body": raw_body}
+    if attributes:
+        record["attributes"] = attributes
+    return record
 
 
 def sqs_job_message(message_id: str, job_id: str, key: str) -> dict:
@@ -186,7 +189,7 @@ def test_worker_skips_unknown_job_without_starting_transcription(pipeline):
     assert pipeline["transcription"].started == []
 
 
-def test_worker_reports_unsupported_media(pipeline, monkeypatch):
+def test_worker_marks_unsupported_media_failed_without_retry(pipeline, monkeypatch):
     # The real provider validates the media format before any AWS call,
     # so None clients are safe here.
     monkeypatch.setattr(
@@ -200,8 +203,47 @@ def test_worker_reports_unsupported_media(pipeline, monkeypatch):
 
     result = work({"Records": [sqs_job_message("m1", job["job_id"], key)]}, {})
 
+    assert result == {"batchItemFailures": []}
+    item = pipeline["repo"].get_job(job["job_id"])
+    assert item["status"] == "failed"
+    assert item["failure_reason"] == "transcription: unsupported media format: .txt"
+
+
+def test_worker_retries_transient_errors_before_max_attempts(pipeline, monkeypatch):
+    class FlakyTranscription(FakeTranscriptionProvider):
+        def start_transcription(self, job_id: str, bucket: str, key: str) -> str:
+            raise RuntimeError("transcribe down")
+
+    monkeypatch.setattr(worker_module, "_transcription", lambda: FlakyTranscription())
+    job = pipeline["repo"].create_job("sub-1", "a.mp3", "audio/mpeg", ts(0))
+    pipeline["repo"].transition(job["job_id"], "queued", ts(1))
+    key = f"uploads/sub-1/{job['job_id']}/a.mp3"
+
+    result = work({"Records": [sqs_job_message("m1", job["job_id"], key)]}, {})
+
     assert result == {"batchItemFailures": [{"itemIdentifier": "m1"}]}
     assert pipeline["repo"].get_job(job["job_id"])["status"] == "queued"
+
+
+def test_worker_marks_failed_after_max_attempts(pipeline, monkeypatch):
+    class FlakyTranscription(FakeTranscriptionProvider):
+        def start_transcription(self, job_id: str, bucket: str, key: str) -> str:
+            raise RuntimeError("transcribe down")
+
+    monkeypatch.setattr(worker_module, "_transcription", lambda: FlakyTranscription())
+    job = pipeline["repo"].create_job("sub-1", "a.mp3", "audio/mpeg", ts(0))
+    pipeline["repo"].transition(job["job_id"], "queued", ts(1))
+    key = f"uploads/sub-1/{job['job_id']}/a.mp3"
+
+    record = sqs_job_message("m1", job["job_id"], key)
+    record["attributes"] = {"ApproximateReceiveCount": "3"}
+
+    result = work({"Records": [record]}, {})
+
+    assert result == {"batchItemFailures": []}
+    item = pipeline["repo"].get_job(job["job_id"])
+    assert item["status"] == "failed"
+    assert "processing failed after 3 attempts" in item["failure_reason"]
 
 
 def transcribe_event(job_id: str, status: str, reason: str | None = None) -> dict:

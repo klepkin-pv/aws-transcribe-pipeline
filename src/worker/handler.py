@@ -7,10 +7,14 @@ skipped instead of double-processing the job.
 Transcription is started before the claim: job names are unique per job id,
 so a retried message hits a Transcribe conflict and simply proceeds.
 
-Unknown jobs and duplicate deliveries are skipped (success). Only real
-processing failures are reported via ReportBatchItemFailures, so a poison
-message still reaches the DLQ through the redrive policy while the rest of
-the batch succeeds.
+Failure taxonomy:
+- unknown job / duplicate delivery    -> skipped (success)
+- permanent errors (bad media format) -> job failed with a reason
+- transient errors                    -> reported via ReportBatchItemFailures;
+  SQS redelivers after the visibility timeout, which is the backoff
+- after MAX_ATTEMPTS redeliveries     -> job failed, message no longer
+  retried (a terminal job must not keep looping)
+- poison messages without a job id    -> DLQ via the partial batch report
 """
 
 from __future__ import annotations
@@ -23,12 +27,18 @@ from typing import Any
 
 import boto3
 
-from lib.providers.transcription import TranscribeProvider, TranscriptionProvider
+from lib.providers.transcription import (
+    TranscribeProvider,
+    TranscriptionError,
+    TranscriptionProvider,
+)
 from lib.settings import load_settings
 from lib.storage import InvalidTransitionError, JobNotFoundError, JobsRepository
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
+
+_MAX_ATTEMPTS = 3
 
 
 @lru_cache(maxsize=1)
@@ -49,6 +59,20 @@ def _transcription() -> TranscriptionProvider:
     )
 
 
+def _receive_count(record: dict) -> int:
+    try:
+        return int(record.get("attributes", {}).get("ApproximateReceiveCount", "1"))
+    except ValueError:
+        return 1
+
+
+def _mark_failed(repo: JobsRepository, job_id: str, reason: str) -> None:
+    try:
+        repo.transition(job_id, "failed", datetime.now(UTC), extra={"failure_reason": reason})
+    except (InvalidTransitionError, JobNotFoundError):
+        logger.info("Job %s is already terminal, not marking failed", job_id)
+
+
 def handler(event: dict, context: Any) -> dict:
     repo = _jobs_repo()
     transcription = _transcription()
@@ -59,6 +83,12 @@ def handler(event: dict, context: Any) -> dict:
         try:
             body = json.loads(record["body"])
             job_id = body["job_id"]
+        except Exception:
+            logger.exception("Dropping unparseable message %s", message_id)
+            batch_item_failures.append({"itemIdentifier": message_id})
+            continue
+
+        try:
             repo.get_job(job_id)  # unknown jobs are skipped, not retried
 
             job_name = transcription.start_transcription(
@@ -70,8 +100,18 @@ def handler(event: dict, context: Any) -> dict:
         except (InvalidTransitionError, JobNotFoundError) as exc:
             # Duplicate delivery or an unknown job — not worth a retry.
             logger.info("Skipping message %s: %s", message_id, exc)
-        except Exception:
-            logger.exception("Failed to process message %s", message_id)
-            batch_item_failures.append({"itemIdentifier": message_id})
+        except TranscriptionError as exc:
+            # Permanent: retrying a bad media format never helps.
+            logger.info("Job %s failed permanently: %s", job_id, exc)
+            _mark_failed(repo, job_id, f"transcription: {exc}")
+        except Exception as exc:
+            attempts = _receive_count(record)
+            if attempts >= _MAX_ATTEMPTS:
+                logger.exception("Job %s failed after %s attempts", job_id, attempts)
+                _mark_failed(repo, job_id, f"processing failed after {attempts} attempts: {exc}")
+            else:
+                # SQS redelivers after the visibility timeout — the backoff.
+                logger.exception("Message %s failed, attempt %s", message_id, attempts)
+                batch_item_failures.append({"itemIdentifier": message_id})
 
     return {"batchItemFailures": batch_item_failures}
