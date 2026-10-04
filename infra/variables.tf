@@ -27,3 +27,9 @@ variable "bedrock_model_id" {
   type        = string
   default     = ""
 }
+
+variable "alert_email" {
+  description = "Email for operational alerts; empty disables the subscription."
+  type        = string
+  default     = ""
+}

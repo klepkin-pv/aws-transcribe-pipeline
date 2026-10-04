@@ -22,3 +22,8 @@ output "uploads_bucket" {
   description = "S3 bucket receiving the uploads."
   value       = aws_s3_bucket.uploads.id
 }
+
+output "alerts_topic_arn" {
+  description = "SNS topic for operational alarms."
+  value       = aws_sns_topic.alerts.arn
+}
