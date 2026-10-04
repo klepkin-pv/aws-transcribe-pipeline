@@ -46,6 +46,10 @@ S3 uploads/ ──ObjectCreated──▶ Lambda: dispatcher ──▶ SQS jobs (
 External providers (AWS Transcribe, the LLM behind the scoring step) sit behind interfaces with
 fakes in tests, so the whole pipeline is testable locally with `moto` and without paid API calls.
 
+The reasoning behind every major choice — single-table design, capacity mode, dispatcher hop,
+idempotency, concurrency limits, failure taxonomy — is written down in
+[docs/architecture.md](docs/architecture.md).
+
 ## Data model
 
 Single DynamoDB table (`PAY_PER_REQUEST`, PITR enabled, TTL on `expires_at`):
