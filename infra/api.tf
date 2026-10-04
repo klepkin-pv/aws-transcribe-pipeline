@@ -75,6 +75,10 @@ resource "aws_lambda_function" "api" {
   memory_size      = 256
   timeout          = 10
 
+  # A burst of API calls cannot exhaust DynamoDB capacity or the account
+  # concurrency budget shared with the pipeline functions.
+  reserved_concurrent_executions = 10
+
   environment {
     variables = {
       PROJECT_NAME   = var.project_name
@@ -129,6 +133,13 @@ resource "aws_apigatewayv2_stage" "default" {
   api_id      = aws_apigatewayv2_api.http.id
   name        = "$default"
   auto_deploy = true
+
+  # Reject excess traffic at the edge instead of paying for Lambda invocations
+  # that the reserved concurrency would throttle anyway.
+  default_route_settings {
+    throttling_burst_limit = 50
+    throttling_rate_limit  = 100
+  }
 }
 
 resource "aws_lambda_permission" "api_gw" {

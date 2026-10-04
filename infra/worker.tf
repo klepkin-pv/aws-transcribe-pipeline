@@ -80,6 +80,10 @@ resource "aws_lambda_function" "worker" {
   memory_size      = 256
   timeout          = 30
 
+  # SQS scales this function with queue depth; the cap keeps the scale-out
+  # predictable for DynamoDB and the Transcribe quota downstream.
+  reserved_concurrent_executions = 20
+
   environment {
     variables = {
       PROJECT_NAME        = var.project_name
