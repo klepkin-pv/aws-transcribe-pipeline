@@ -4,7 +4,7 @@ install:
 	python -m pip install "pytest>=8.0" "ruff>=0.6"
 
 lint:
-	ruff check src tests
+	ruff check src tests scripts
 
 fmt:
 	ruff format src tests
