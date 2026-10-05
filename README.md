@@ -10,10 +10,11 @@ event-driven processing, scaling, fault tolerance and day-2 operations, all defi
 
 ## Status
 
-The pipeline is complete and covered by moto-based tests; every commit keeps CI green.
-Deployment, load numbers and cost data follow once the AWS account exists.
+Feature-complete: the end-to-end pipeline is covered by moto-based tests and every commit
+keeps CI green. Deployment, live latency numbers and dashboard screenshots follow once the
+AWS account exists — the deployment and load-test procedures are in [docs/runbook.md](docs/runbook.md).
 
-## Architecture (draft)
+## Architecture
 
 ```
 client
@@ -84,6 +85,19 @@ Identity comes from the Cognito JWT validated by the API Gateway authorizer
 dots, so it cannot escape the caller's prefix. The signature pins `Content-Type`, and the
 Lambda role holds `s3:PutObject` only under `uploads/*`.
 
+## Operations
+
+- **Dashboard** (`aws_cloudwatch_dashboard`): EMF job counters, queue depth and backlog age,
+  DLQ depths, per-function errors and p99 duration, API 5xx.
+- **Alarms → SNS**: Lambda errors/throttles (all four functions), both DLQs non-empty,
+  queue backlog age > 10 min, API 5xx.
+- **Runbook** ([docs/runbook.md](docs/runbook.md)): alarm triage, DLQ inspection and redrive,
+  single-job replay, Logs Insights queries, cost guardrails.
+- **Load test** (`scripts/load_test.py`): asyncio driver for `POST /jobs` + `GET /jobs`
+  with latency percentiles — the source of the p50/p95/p99 numbers to fill in after deploy.
+- **Cost model** ([docs/cost.md](docs/cost.md)): per-service prices and a 10k-jobs/month
+  scenario, dominated by Transcribe media minutes.
+
 ## Stack
 
 - Python 3.12, FastAPI, boto3
@@ -104,10 +118,13 @@ docs/         architecture decisions, runbook, cost model
 
 ## Roadmap
 
-1. Repository and IaC foundation
-2. Jobs API: DynamoDB single-table + FastAPI on Lambda
-3. Cognito authorizer and presigned uploads
-4. Pipeline, part 1: S3 events → SQS → worker with idempotency
-5. Pipeline, part 2: transcription → scoring → results
-6. Fault tolerance and scaling: alarms, retries, concurrency controls
-7. Operations: dashboard, runbook, cost model, load test
+1. [x] Repository and IaC foundation
+2. [x] Jobs API: DynamoDB single-table + FastAPI on Lambda
+3. [x] Cognito authorizer and presigned uploads
+4. [x] Pipeline, part 1: S3 events → SQS → worker with idempotency
+5. [x] Pipeline, part 2: transcription → scoring → results
+6. [x] Fault tolerance and scaling: alarms, retries, concurrency controls
+7. [x] Operations: dashboard, runbook, cost model, load test
+
+Post-deployment (once the AWS account exists): live deploy, load-test numbers, screenshots,
+and `terraform destroy` of the demo stage.
