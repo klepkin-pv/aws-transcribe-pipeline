@@ -78,9 +78,11 @@ class TranscribeProvider:
         )
         payload = json.loads(obj["Body"].read())
         try:
-            return payload["results"]["transcripts"][0]["transcript"]
+            transcript = payload["results"]["transcripts"][0]["transcript"]
         except (KeyError, IndexError) as exc:
-            raise TranscriptionError(f"unexpected transcript payload for {job_name}") from exc
+            # Transcribe completed without any recognized speech.
+            raise TranscriptionError("transcription contains no speech") from exc
+        return transcript
 
 
 class FakeTranscriptionProvider:

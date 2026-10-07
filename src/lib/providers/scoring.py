@@ -55,24 +55,15 @@ class BedrockScoringProvider:
     def score(self, transcript: str) -> dict:
         if not self._model_id:
             raise ScoringError("bedrock model id is not configured")
-        response = self._client.invoke_model(
+        # The Converse API is model-agnostic: the same call works for Amazon
+        # Nova and Anthropic models behind regional inference profiles.
+        prompt = self.PROMPT.format(transcript=transcript[:12000])
+        response = self._client.converse(
             modelId=self._model_id,
-            contentType="application/json",
-            accept="application/json",
-            body=json.dumps(
-                {
-                    "anthropic_version": "bedrock-2023-05-31",
-                    "max_tokens": 300,
-                    "messages": [
-                        {
-                            "role": "user",
-                            "content": self.PROMPT.format(transcript=transcript[:12000]),
-                        }
-                    ],
-                }
-            ),
+            messages=[{"role": "user", "content": [{"text": prompt}]}],
+            inferenceConfig={"maxTokens": 300},
         )
-        reply = json.loads(response["body"].read())["content"][0]["text"]
+        reply = response["output"]["message"]["content"][0]["text"]
         return parse_score(reply)
 
 

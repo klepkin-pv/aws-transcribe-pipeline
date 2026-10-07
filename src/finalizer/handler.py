@@ -17,7 +17,11 @@ import boto3
 from aws_lambda_powertools import Logger, Metrics
 
 from lib.providers.scoring import BedrockScoringProvider, ScoringProvider
-from lib.providers.transcription import TranscribeProvider, TranscriptionProvider
+from lib.providers.transcription import (
+    TranscribeProvider,
+    TranscriptionError,
+    TranscriptionProvider,
+)
 from lib.settings import load_settings
 from lib.storage import InvalidTransitionError, JobNotFoundError, JobsRepository
 
@@ -87,7 +91,16 @@ def handler(event: dict, context: Any) -> dict:
         metrics.add_metric(name="JobFailed", unit="Count", value=1)
         return {"status": "failed", "reason": reason}
 
-    transcript = _transcription().transcript_text(detail["TranscriptionJobName"])
+    try:
+        transcript = _transcription().transcript_text(detail["TranscriptionJobName"])
+    except TranscriptionError as exc:
+        # Transcribe finished without usable speech (or the output is damaged):
+        # retrying cannot help, so the job fails right away.
+        logger.info("Job %s failed in transcript read: %s", job_id, exc)
+        repo.transition(job_id, "failed", now, extra={"failure_reason": str(exc)})
+        metrics.add_metric(name="JobFailed", unit="Count", value=1)
+        return {"status": "failed", "reason": str(exc)}
+
     try:
         repo.transition(job_id, "scoring", now)
     except InvalidTransitionError:

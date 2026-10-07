@@ -312,6 +312,27 @@ def test_finalizer_skips_duplicate_event_after_done(pipeline):
     assert pipeline["repo"].get_job(job["job_id"])["status"] == "done"
 
 
+def test_finalizer_marks_failed_on_empty_transcript(pipeline, monkeypatch):
+    from lib.providers.transcription import TranscriptionError
+
+    class SilentTranscription(FakeTranscriptionProvider):
+        def transcript_text(self, job_name: str) -> str:
+            raise TranscriptionError("transcription contains no speech")
+
+    monkeypatch.setattr(finalizer_module, "_transcription", lambda: SilentTranscription())
+    job = pipeline["repo"].create_job("sub-1", "a.mp3", "audio/mpeg", ts(0))
+    for status in ("queued", "processing", "transcribing"):
+        pipeline["repo"].transition(job["job_id"], status, ts(1))
+
+    event = transcribe_event(job["job_id"], "COMPLETED")
+    result = finalize(event, lambda_context())
+
+    assert result == {"status": "failed", "reason": "transcription contains no speech"}
+    item = pipeline["repo"].get_job(job["job_id"])
+    assert item["status"] == "failed"
+    assert item["failure_reason"] == "transcription contains no speech"
+
+
 def test_finalizer_marks_failed_when_scoring_fails(pipeline, monkeypatch):
     class BrokenScoring:
         def score(self, transcript: str) -> dict:
