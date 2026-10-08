@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+from string import Template
 from typing import Any, Protocol
 
 logger = logging.getLogger(__name__)
@@ -42,10 +43,12 @@ def parse_score(text: str) -> dict:
 
 
 class BedrockScoringProvider:
-    PROMPT = (
+    # `string.Template`, not str.format: the prompt carries literal JSON braces,
+    # and str.format would read {"score": ...} as a field and raise KeyError.
+    PROMPT = Template(
         "You are scoring an interview recording transcript. "
         'Reply with strict JSON only: {"score": <0-100>, "summary": "<one sentence>"}.'
-        "\n\nTranscript:\n{transcript}"
+        "\n\nTranscript:\n$transcript"
     )
 
     def __init__(self, bedrock_client: Any, model_id: str) -> None:
@@ -57,7 +60,7 @@ class BedrockScoringProvider:
             raise ScoringError("bedrock model id is not configured")
         # The Converse API is model-agnostic: the same call works for Amazon
         # Nova and Anthropic models behind regional inference profiles.
-        prompt = self.PROMPT.format(transcript=transcript[:12000])
+        prompt = self.PROMPT.safe_substitute(transcript=transcript[:12000])
         response = self._client.converse(
             modelId=self._model_id,
             messages=[{"role": "user", "content": [{"text": prompt}]}],

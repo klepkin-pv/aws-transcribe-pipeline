@@ -23,7 +23,13 @@ variable "transcribe_language" {
 }
 
 variable "bedrock_model_id" {
-  description = "Bedrock model id for transcript scoring; empty means scoring is not configured yet."
+  description = <<-EOT
+    Bedrock model id for transcript scoring; empty means scoring is not
+    configured yet and the function role gets no bedrock:InvokeModel grant.
+    Must be a model that accepts Converse on-demand calls in var.aws_region —
+    several Bedrock models are reachable only through an inference profile,
+    which is a different id and a different IAM resource.
+  EOT
   type        = string
   default     = ""
 }

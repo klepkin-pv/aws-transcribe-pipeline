@@ -72,6 +72,23 @@ The worker will fail the claim (status is terminal) — for a true replay, first
 job item with its status reset to `created` (write a small one-off script; deliberately
 not automated to avoid accidental replays in production).
 
+## Replay the scoring step for one job
+
+The finalizer reads only `transcripts/job-<id>.json` from S3, so scoring can be re-run without
+touching Amazon Transcribe: stage the transcript, put the job back into `transcribing`, and
+deliver the same event Transcribe would have sent.
+
+```bash
+aws s3 cp transcript.json s3://<uploads-bucket>/transcripts/job-<id>.json
+aws lambda invoke \
+  --function-name aws-transcribe-pipeline-finalizer-dev \
+  --payload '{"detail":{"TranscriptionJobName":"job-<id>","TranscriptionJobStatus":"COMPLETED"}}' \
+  /dev/stdout
+```
+
+Useful when Transcribe is unavailable or over budget, and as the way to re-score with a
+different model after a prompt change.
+
 ## Triage queries
 
 Saved in CloudWatch (see `dashboard.tf`):

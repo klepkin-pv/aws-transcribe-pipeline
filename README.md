@@ -11,10 +11,10 @@ event-driven processing, scaling, fault tolerance and day-2 operations, all defi
 ## Status
 
 Deployed and exercised on a real AWS account (eu-central-1): `terraform apply` builds the whole
-stack, and the jobs API has been driven live with the load test below. The transcription and
-scoring steps are covered by tests against mocked AWS APIs — the account used for the deploy has
-no Amazon Transcribe subscription, so that leg of the pipeline has not been run against the
-real service. Deployment and triage procedures are in [docs/runbook.md](docs/runbook.md).
+stack, the jobs API has been driven live with the load test below, and the scoring leg has run
+end to end against Bedrock. Amazon Transcribe is not subscribed on the deployment account, so
+transcription itself is covered by tests against mocked AWS APIs rather than by a live run.
+Deployment and triage procedures are in [docs/runbook.md](docs/runbook.md).
 
 ## Architecture
 
@@ -116,6 +116,22 @@ clients, each iteration a `POST /jobs` followed by a `GET /jobs`:
 Latency here is client-observed wall time, so it includes the round trip to `eu-central-1`;
 per-function server-side duration lives in the dashboard widget.
 
+### Verified on AWS
+
+What actually ran against real AWS services, and what is only covered by tests:
+
+| Step | Verified live |
+|---|---|
+| `terraform apply` of the whole stack | yes — API, IAM, queues, DynamoDB, S3, Cognito, EventBridge, dashboard, alarms |
+| Cognito → JWT authorizer → `POST /jobs` / `GET /jobs` | yes — including the 404 for another user's job and cursor pagination |
+| Presigned S3 upload → dispatcher → SQS → worker | yes |
+| Retry taxonomy | yes — a failing job logged attempts 1–2, then `failed after 3 attempts` with `JobFailedPermanently`; both DLQs stayed empty |
+| Scoring leg (transcript → Bedrock → `done` with score and summary) | yes, replayed through the finalizer as the runbook describes |
+| Amazon Transcribe job itself | no — the account has no Transcribe subscription, so only mocked tests cover that call |
+
+Scoring runs model-agnostically through the Converse API; the deployment uses
+`qwen.qwen3-32b-v1:0`, and `bedrock_model_id` selects any other Converse-capable model.
+
 ## Stack
 
 - Python 3.12, FastAPI, boto3
@@ -144,6 +160,6 @@ docs/         architecture decisions, runbook, cost model
 6. [x] Fault tolerance and scaling: alarms, retries, concurrency controls
 7. [x] Operations: dashboard, runbook, cost model, load test
 
-Deployment is done and the API path is measured. Still to do: run the transcription and scoring
-leg against the real services on an account with an Amazon Transcribe subscription, and
-`terraform destroy` of the demo stage when the walkthrough is recorded.
+Deployment is done, the API path is measured and the scoring step has run live against Bedrock.
+Still to do: the transcription leg against the real Amazon Transcribe service (needs a
+subscription), and `terraform destroy` of the demo stage when the walkthrough is recorded.

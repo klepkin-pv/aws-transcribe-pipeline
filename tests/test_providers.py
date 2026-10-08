@@ -71,5 +71,25 @@ def test_bedrock_scoring_requires_model_id():
         provider.score("transcript")
 
 
+def test_bedrock_scoring_sends_prompt_with_literal_json_braces():
+    # The prompt template carries literal JSON, so its substitution must not go
+    # through str.format — that raises KeyError on {"score": ...}.
+    captured: dict = {}
+
+    class StubBedrock:
+        def converse(self, **kwargs):
+            captured.update(kwargs)
+            reply = '{"score": 87, "summary": "ok"}'
+            return {"output": {"message": {"content": [{"text": reply}]}}}
+
+    provider = BedrockScoringProvider(StubBedrock(), "amazon.nova-micro-v1:0")
+
+    assert provider.score("hello there") == {"score": 87, "summary": "ok"}
+    assert captured["modelId"] == "amazon.nova-micro-v1:0"
+    prompt = captured["messages"][0]["content"][0]["text"]
+    assert '{"score": <0-100>' in prompt
+    assert prompt.endswith("hello there")
+
+
 def test_fake_scoring_provider():
     assert FakeScoringProvider().score("hello") == {"score": 42, "summary": "fake summary"}

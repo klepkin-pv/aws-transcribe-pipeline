@@ -31,29 +31,41 @@ resource "aws_iam_role_policy" "finalizer" {
 
   policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [
-      {
-        Sid    = "JobsTable"
-        Effect = "Allow"
-        Action = ["dynamodb:Query", "dynamodb:UpdateItem"]
-        Resource = [
-          aws_dynamodb_table.jobs.arn,
-          "${aws_dynamodb_table.jobs.arn}/index/*"
-        ]
-      },
-      {
-        Sid      = "ReadTranscripts"
-        Effect   = "Allow"
-        Action   = ["s3:GetObject"]
-        Resource = "${aws_s3_bucket.uploads.arn}/transcripts/*"
-      },
-      {
-        Sid      = "Logs"
-        Effect   = "Allow"
-        Action   = ["logs:CreateLogStream", "logs:PutLogEvents"]
-        Resource = "${aws_cloudwatch_log_group.finalizer.arn}:*"
-      }
-    ]
+    Statement = concat(
+      [
+        {
+          Sid    = "JobsTable"
+          Effect = "Allow"
+          Action = ["dynamodb:Query", "dynamodb:UpdateItem"]
+          Resource = [
+            aws_dynamodb_table.jobs.arn,
+            "${aws_dynamodb_table.jobs.arn}/index/*"
+          ]
+        },
+        {
+          Sid      = "ReadTranscripts"
+          Effect   = "Allow"
+          Action   = ["s3:GetObject"]
+          Resource = "${aws_s3_bucket.uploads.arn}/transcripts/*"
+        },
+        {
+          Sid      = "Logs"
+          Effect   = "Allow"
+          Action   = ["logs:CreateLogStream", "logs:PutLogEvents"]
+          Resource = "${aws_cloudwatch_log_group.finalizer.arn}:*"
+        }
+      ],
+      # Scoped to the single configured model, and omitted entirely while
+      # scoring is not set up — an unused grant is still an attack surface.
+      var.bedrock_model_id == "" ? [] : [
+        {
+          Sid      = "InvokeScoringModel"
+          Effect   = "Allow"
+          Action   = ["bedrock:InvokeModel"]
+          Resource = "arn:aws:bedrock:${var.aws_region}::foundation-model/${var.bedrock_model_id}"
+        }
+      ]
+    )
   })
 }
 
