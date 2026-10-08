@@ -35,9 +35,12 @@ resource "aws_cloudwatch_dashboard" "main" {
           view   = "timeSeries"
           stat   = "Maximum"
           period = 300
+          # A metric row may hold at most 4 entries, so the per-row options
+          # object is not allowed next to three dimensions — both gauges are
+          # read with the widget-level Maximum stat instead.
           metrics = [
             ["AWS/SQS", "ApproximateNumberOfMessagesVisible", "QueueName", aws_sqs_queue.jobs.name],
-            ["AWS/SQS", "ApproximateAgeOfOldestMessage", "QueueName", aws_sqs_queue.jobs.name, { stat = "Maximum", y = 20 }]
+            ["AWS/SQS", "ApproximateAgeOfOldestMessage", "QueueName", aws_sqs_queue.jobs.name]
           ]
         }
       },

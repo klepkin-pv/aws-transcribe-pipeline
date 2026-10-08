@@ -10,9 +10,11 @@ event-driven processing, scaling, fault tolerance and day-2 operations, all defi
 
 ## Status
 
-Feature-complete: the end-to-end pipeline is covered by moto-based tests and every commit
-keeps CI green. Deployment, live latency numbers and dashboard screenshots follow once the
-AWS account exists — the deployment and load-test procedures are in [docs/runbook.md](docs/runbook.md).
+Deployed and exercised on a real AWS account (eu-central-1): `terraform apply` builds the whole
+stack, and the jobs API has been driven live with the load test below. The transcription and
+scoring steps are covered by tests against mocked AWS APIs — the account used for the deploy has
+no Amazon Transcribe subscription, so that leg of the pipeline has not been run against the
+real service. Deployment and triage procedures are in [docs/runbook.md](docs/runbook.md).
 
 ## Architecture
 
@@ -67,8 +69,8 @@ Single DynamoDB table (`PAY_PER_REQUEST`, PITR enabled, TTL on `expires_at`):
 - `GET /jobs` — the caller's jobs, newest first; cursor pagination via `limit` (1–100) and `cursor`
 - `GET /jobs/{job_id}` — a single job; other users' jobs return 404
 
-Identity comes from the Cognito JWT validated by the API Gateway authorizer
-(Terraform wiring lands with the function deployment step).
+Identity comes from the Cognito JWT validated by the API Gateway authorizer, so every route —
+including ones added later — is rejected without a valid token.
 
 ## Upload flow
 
@@ -94,9 +96,25 @@ Lambda role holds `s3:PutObject` only under `uploads/*`.
 - **Runbook** ([docs/runbook.md](docs/runbook.md)): alarm triage, DLQ inspection and redrive,
   single-job replay, Logs Insights queries, cost guardrails.
 - **Load test** (`scripts/load_test.py`): asyncio driver for `POST /jobs` + `GET /jobs`
-  with latency percentiles — the source of the p50/p95/p99 numbers to fill in after deploy.
+  with latency percentiles — see the measured run below.
 - **Cost model** ([docs/cost.md](docs/cost.md)): per-service prices and a 10k-jobs/month
   scenario, dominated by Transcribe media minutes.
+
+### Measured
+
+`scripts/load_test.py --concurrency 10 --duration 30` against the deployed API, 10 parallel
+clients, each iteration a `POST /jobs` followed by a `GET /jobs`:
+
+| metric | value |
+|--------|-------|
+| iterations | 1134 |
+| throughput | 37.8 it/s |
+| p50 | 114 ms |
+| p95 | 134 ms |
+| p99 | 311 ms |
+
+Latency here is client-observed wall time, so it includes the round trip to `eu-central-1`;
+per-function server-side duration lives in the dashboard widget.
 
 ## Stack
 
@@ -126,5 +144,6 @@ docs/         architecture decisions, runbook, cost model
 6. [x] Fault tolerance and scaling: alarms, retries, concurrency controls
 7. [x] Operations: dashboard, runbook, cost model, load test
 
-Post-deployment (once the AWS account exists): live deploy, load-test numbers, screenshots,
-and `terraform destroy` of the demo stage.
+Deployment is done and the API path is measured. Still to do: run the transcription and scoring
+leg against the real services on an account with an Amazon Transcribe subscription, and
+`terraform destroy` of the demo stage when the walkthrough is recorded.

@@ -52,6 +52,10 @@ so the S3 retry can start over.
   before it becomes a billed Lambda invocation.
 - Worker batch size 5 with `visibility_timeout = 90s`, above the 30s function timeout:
   a slow batch never double-processes messages.
+- Both caps are Terraform variables (`api_reserved_concurrency`, `worker_reserved_concurrency`);
+  `0` means "no reservation". A new AWS account has a Lambda limit of 10 concurrent executions and
+  AWS requires 10 of them to stay unreserved, so the variables exist to let the stack deploy
+  where a reservation is impossible — see [runbook.md](runbook.md).
 
 ## ADR-7: Failure taxonomy and retries
 

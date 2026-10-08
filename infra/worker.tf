@@ -88,7 +88,7 @@ resource "aws_lambda_function" "worker" {
 
   # SQS scales this function with queue depth; the cap keeps the scale-out
   # predictable for DynamoDB and the Transcribe quota downstream.
-  reserved_concurrent_executions = 20
+  reserved_concurrent_executions = var.worker_reserved_concurrency > 0 ? var.worker_reserved_concurrency : null
 
   environment {
     variables = {

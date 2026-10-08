@@ -77,7 +77,7 @@ resource "aws_lambda_function" "api" {
 
   # A burst of API calls cannot exhaust DynamoDB capacity or the account
   # concurrency budget shared with the pipeline functions.
-  reserved_concurrent_executions = 10
+  reserved_concurrent_executions = var.api_reserved_concurrency > 0 ? var.api_reserved_concurrency : null
 
   tracing_config {
     mode = "Active"

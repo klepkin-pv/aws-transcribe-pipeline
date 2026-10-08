@@ -3,7 +3,7 @@
 Day-2 operations for the pipeline. Everything here assumes `aws` CLI is configured for the
 deployment account and `terraform output` values are at hand.
 
-## Service level objectives (draft)
+## Service level objectives
 
 | Objective | Target | Measured by |
 |---|---|---|
@@ -11,7 +11,20 @@ deployment account and `terraform output` values are at hand.
 | API latency | p99 < 1s (create + list) | Lambda `Duration` p99 widget |
 | Pipeline latency | job `done` in < 5 min p95 | EMF metrics `JobClaimed` → `JobDone` |
 
-Numbers become real after the first deployment and load test.
+API latency is confirmed against a live deployment: 10 concurrent clients, 30 s, p50 114 ms /
+p95 134 ms / p99 311 ms client-observed (see README). Pipeline latency is still the target only —
+the deployment account has no Amazon Transcribe subscription, so no job has reached `done` there.
+
+## Fresh accounts and reserved concurrency
+
+A brand-new AWS account gets a Lambda account limit of 10 concurrent executions, and AWS refuses
+any reservation that would leave fewer than 10 unreserved — so `terraform apply` fails with
+`Specified ReservedConcurrentExecutions ... below its minimum value of [10]` on an untouched
+account. Raise the quota first (Service Quotas → AWS Lambda → Concurrent executions), or deploy
+with `-var="api_reserved_concurrency=0" -var="worker_reserved_concurrency=0"`, which removes the
+reservations and lets the account-level limit act as the only cap. On any account that runs more
+than one workload, keep the reservations — they are what stops an API burst from starving the
+pipeline.
 
 ## Alarms → first response
 

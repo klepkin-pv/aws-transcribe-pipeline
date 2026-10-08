@@ -28,6 +28,28 @@ variable "bedrock_model_id" {
   default     = ""
 }
 
+variable "api_reserved_concurrency" {
+  description = <<-EOT
+    Reserved concurrency for the API function. 0 disables the reservation.
+    New AWS accounts ship with a Lambda account limit of 10 concurrent
+    executions and AWS refuses any reservation that would leave fewer than 10
+    unreserved, so on a fresh account this must stay 0 until the quota
+    (L-B99A9384) is raised. Keep it set on any account that runs more than one
+    workload: it is what stops an API burst from starving the pipeline.
+  EOT
+  type        = number
+  default     = 10
+}
+
+variable "worker_reserved_concurrency" {
+  description = <<-EOT
+    Reserved concurrency for the queue worker. 0 disables the reservation —
+    see var.api_reserved_concurrency for the fresh-account quota caveat.
+  EOT
+  type        = number
+  default     = 20
+}
+
 variable "alert_email" {
   description = "Email for operational alerts; empty disables the subscription."
   type        = string
